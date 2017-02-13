@@ -38,6 +38,13 @@
     // 给Person类添加一个NSString类型的实例变量（instance variable），第四个参数是对其方式，第五个参数是参数类型
     class_addIvar(Person, "name", sizeof(NSString *), 0, "@");
     
+    // 添加属性
+    objc_property_attribute_t type = {"T", "@\"NSString\""};
+    objc_property_attribute_t ownership = { "C", "" };
+    objc_property_attribute_t backingivar = { "V", "_ivar1"};
+    objc_property_attribute_t attrs[] = {type, ownership, backingivar};
+    class_addProperty(Person, "property2", attrs, 3);
+    
     // 给Person类添加一个实例方法（instance method）
     // "v@:@",解释v-返回值void类型,@-self指针id类型,:-SEL指针SEL类型
     class_addMethod(Person, @selector(getName), (IMP)getName, "v@:");
@@ -49,10 +56,14 @@
     
     // 实例化一个Person类对象
     id person = [[Person alloc] init];
+//    //可以看出class_createInstance和alloc的不同
+//    id theObject = class_createInstance([NSString class], sizeof(unsigned));      // 在ARC下不允许使用
+//    id str1 = [theObject init];
+//    id str2 = [[NSString alloc] initWithString:@"test"];
     
     // 设置实例变量的值
     [person setValue:@"jacedy" forKey:@"name"];
-//    object_setInstanceVariable(person, "name", (void *)&str);在ARC下不允许使用
+//    object_setInstanceVariable(person, "name", (void *)&str);     // 在ARC下不允许使用
     
     // 调用getName方法
     NSLog(@"nameValue: %@", [person getName]);  // objc_msgSend(person, @selector(getName))
@@ -116,19 +127,37 @@
     NSLog(@"copyTeacher:%@", [copyTeacher description]);
     
     
-#pragma mark - Hook
-    Method m1 = class_getInstanceMethod([self class], @selector(viewWillAppear:));
-    Method m2 = class_getInstanceMethod([self class], @selector(jk_viewWillAppear:));
-    
-    BOOL isSuccess = class_addMethod([self class], @selector(viewWillAppear:), method_getImplementation(m2), method_getTypeEncoding(m2));
-    if (isSuccess) {
-        // 添加成功：说明源方法m1现在的实现为交换方法m2的实现，现在将源方法m1的实现替换到交换方法m2中
+#pragma mark - Hook拦截
+/*
+ 使用method swizzling需要注意的问题:
+ 1.Swizzling应该总在+load中执行：Objective-C在运行时会自动调用类的两个方法+load和+initialize。+load会在类初始加载时调用，和+initialize比较+load能保证在类的初始化过程中被加载
+ 2.Swizzling应该总是在dispatch_once中执行：swizzling会改变全局状态，所以在运行时采取一些预防措施，使用dispatch_once就能够确保代码不管有多少线程都只被执行一次。这将成为method swizzling的最佳实践。
+ 3.Selector，Method和Implementation：这几个之间关系可以这样理解，一个类维护一个运行时可接收的消息分发表，分发表中每个入口是一个Method，其中key是一个特定的名称，及SEL，与其对应的实现是IMP即指向底层C函数的指针。
+ */
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class class = [self class];
+        // When swizzling a class method, use the following:
+        // Class class = object_getClass((id)self);
         
-        class_replaceMethod([self class], @selector(jk_viewWillAppear:), method_getImplementation(m1), method_getTypeEncoding(m1));
-    }else {
-        //添加失败：说明源方法已经有实现，直接将两个方法的实现交换即
-        method_exchangeImplementations(m1, m2);
-    }
+        //通过method swizzling修改了UIViewController的@selector(viewWillAppear:)的指针使其指向了自定义的jk_viewWillAppear
+        SEL originalSelector = @selector(viewWillAppear:);
+        SEL swizzledSelector = @selector(jk_viewWillAppear:);
+        
+        Method originalMethod = class_getInstanceMethod(class, originalSelector);
+        Method swizzledMethod = class_getInstanceMethod(class, swizzledSelector);
+        
+        BOOL didAddMethod = class_addMethod(class, originalSelector, method_getImplementation(swizzledMethod), method_getTypeEncoding(swizzledMethod));
+        
+        //如果类中不存在要替换的方法，就先用class_addMethod和class_replaceMethod函数添加和替换两个方法实现。但如果已经有了要替换的方法，就调用method_exchangeImplementations函数交换两个方法的Implementation。
+        if (didAddMethod) {
+            class_replaceMethod(class, swizzledSelector, method_getImplementation(originalMethod), method_getTypeEncoding(originalMethod));
+        } else {
+            method_exchangeImplementations(originalMethod, swizzledMethod);
+        }
+    });
+    
+    
 }
 
 -(void)viewWillAppear:(BOOL)animated {

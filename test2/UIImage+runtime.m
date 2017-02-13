@@ -41,6 +41,8 @@ static char *sexProperty = "sexProperty";
     
     // 交换方法地址，相当于交换实现方式
     method_exchangeImplementations(imageNameMethod, wg_imageWithNameMethod);
+    
+    
 }
 
 // 加载图片, 判断是否为空
